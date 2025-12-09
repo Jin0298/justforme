@@ -121,6 +121,37 @@ HTML_TEMPLATE = '''
       font-weight: bold;
       text-align: center;
     }
+    
+    @media (max-width: 768px) {
+      .winner-display {
+        top: 5px;
+        right: 5px;
+        bottom: auto;
+        max-width: 150px;
+        min-width: 150px;
+        max-height: 35vh;
+        padding: 8px;
+        background: rgba(0,0,0,0.7);
+        border-width: 2px;
+      }
+      
+      .winner-display h3 {
+        font-size: 14px;
+        margin-bottom: 5px;
+      }
+      
+      .winner-item, .winner-item-lost {
+        font-size: 11px;
+        padding: 5px;
+        margin: 3px 0;
+      }
+      
+      .time-accelerate-notice {
+        font-size: 10px;
+        padding: 5px 8px;
+        margin-bottom: 5px;
+      }
+    }
   </style>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>

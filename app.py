@@ -153,9 +153,9 @@ HTML_TEMPLATE = '''
     let winningRank = 0;
     let particles = [];
     let elapsedTime = 0;
-    let finalWinners = [];
     let lotteryFinished = false;
     let winnerMarble = null;
+    let winnerStartIndex = -1;
     
     class Particle {
       constructor(x, y) {
@@ -240,33 +240,28 @@ HTML_TEMPLATE = '''
       
       const remainingMarbles = totalMarbles - winners.length;
       
+      if (winnerStartIndex === -1 && remainingMarbles === winningRank) {
+        winnerStartIndex = winners.length;
+        console.log('Winners start at index:', winnerStartIndex);
+      }
+      
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
-        console.log('Last marble remaining! Winners confirmed!');
-        
         winnerMarble = state.marbles[0];
+        console.log('Lottery finished! Last marble:', winnerMarble.name);
         
-        finalWinners = [];
-        
-        for (let i = state.marbles.length - 1; i >= 0; i--) {
-          const marble = state.marbles[i];
-          const rank = winningRank - (state.marbles.length - 1 - i);
-          finalWinners.push({
-            rank: rank,
-            name: marble.name
-          });
+        const finalWinners = [];
+        for (let i = winnerStartIndex; i < winners.length; i++) {
+          finalWinners.push(winners[i].name);
         }
+        finalWinners.push(winnerMarble.name);
         
-        const winnerNamesList = finalWinners.map(w => w.name);
-        
-        console.log('Final winners confirmed:', finalWinners);
-        console.log('Sending to parent:', winnerNamesList);
+        console.log('Final winners list:', finalWinners);
         
         if (window.parent !== window) {
           window.parent.postMessage({
             type: 'PINBALL_WINNERS',
-            winners: winnerNamesList,
-            finished: true
+            winners: finalWinners
           }, '*');
         }
         
@@ -290,21 +285,27 @@ HTML_TEMPLATE = '''
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
       
-      if (lotteryFinished && finalWinners.length > 0) {
-        finalWinners.forEach(winner => {
-          const div = document.createElement('div');
-          div.className = 'winner-item';
-          div.textContent = winner.rank + '위: ' + winner.name;
-          list.appendChild(div);
-        });
-      }
-      
       for (let i = winners.length - 1; i >= 0; i--) {
         const winner = winners[i];
         const rank = totalMarbles - i;
         const div = document.createElement('div');
-        div.className = 'winner-item-lost';
-        div.textContent = rank + '위: ' + winner.name;
+        
+        if (winnerStartIndex !== -1 && i >= winnerStartIndex) {
+          div.className = 'winner-item';
+          const winnerRank = winningRank - (i - winnerStartIndex);
+          div.textContent = winnerRank + '위: ' + winner.name;
+        } else {
+          div.className = 'winner-item-lost';
+          div.textContent = rank + '위: ' + winner.name;
+        }
+        
+        list.appendChild(div);
+      }
+      
+      if (lotteryFinished && state.marbles && state.marbles.length > 0) {
+        const div = document.createElement('div');
+        div.className = 'winner-item';
+        div.textContent = '1위: ' + state.marbles[0].name;
         list.appendChild(div);
       }
       

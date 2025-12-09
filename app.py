@@ -157,6 +157,7 @@ HTML_TEMPLATE = '''
     let elapsedTime = 0;
     let finalWinners = [];
     let lotteryFinished = false;
+    let winnerNames = [];
     
     class Particle {
       constructor(x, y) {
@@ -241,10 +242,19 @@ HTML_TEMPLATE = '''
       
       const remainingMarbles = totalMarbles - winners.length;
       
-      if (!lotteryFinished && state.is_running === false && remainingMarbles === winningRank) {
-        lotteryFinished = true;
+      if (!hasWinner && remainingMarbles === winningRank) {
         hasWinner = true;
-        console.log('Lottery finished! Final winners:', remainingMarbles);
+        console.log('Winners determined! Remaining:', remainingMarbles);
+        
+        if (state.marbles && state.marbles.length > 0) {
+          winnerNames = state.marbles.map(m => m.name);
+          console.log('Winner names locked:', winnerNames);
+        }
+      }
+      
+      if (!lotteryFinished && hasWinner && state.is_running === false) {
+        lotteryFinished = true;
+        console.log('Lottery finished! Finalizing...');
         
         if (state.marbles && state.marbles.length > 0) {
           winnerMarble = state.marbles[0];
@@ -296,12 +306,18 @@ HTML_TEMPLATE = '''
           div.textContent = winner.rank + '위: ' + winner.name;
           list.appendChild(div);
         });
-      } else if (state.marbles && state.marbles.length > 0 && !lotteryFinished) {
+      } else if (state.marbles && state.marbles.length > 0) {
         const remaining = totalMarbles - winners.length;
         state.marbles.forEach((marble, idx) => {
           const rank = remaining - idx;
           const div = document.createElement('div');
-          div.className = 'winner-item-lost';
+          
+          if (hasWinner && winnerNames.includes(marble.name)) {
+            div.className = 'winner-item';
+          } else {
+            div.className = 'winner-item-lost';
+          }
+          
           div.textContent = rank + '위: ' + marble.name;
           list.appendChild(div);
         });

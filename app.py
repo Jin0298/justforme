@@ -152,12 +152,10 @@ HTML_TEMPLATE = '''
     let totalMarbles = 0;
     let winningRank = 0;
     let particles = [];
-    let hasWinner = false;
-    let winnerMarble = null;
     let elapsedTime = 0;
     let finalWinners = [];
     let lotteryFinished = false;
-    let winnerNames = [];
+    let winnerMarble = null;
     
     class Particle {
       constructor(x, y) {
@@ -242,47 +240,38 @@ HTML_TEMPLATE = '''
       
       const remainingMarbles = totalMarbles - winners.length;
       
-      if (!hasWinner && remainingMarbles === winningRank) {
-        hasWinner = true;
-        console.log('Winners determined! Remaining:', remainingMarbles);
-        
-        if (state.marbles && state.marbles.length > 0) {
-          winnerNames = state.marbles.map(m => m.name);
-          console.log('Winner names locked:', winnerNames);
-        }
-      }
-      
-      if (!lotteryFinished && hasWinner && state.is_running === false) {
+      if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
-        console.log('Lottery finished! Finalizing...');
+        console.log('Last marble remaining! Winners confirmed!');
         
-        if (state.marbles && state.marbles.length > 0) {
-          winnerMarble = state.marbles[0];
-          
-          finalWinners = [];
-          for (let i = state.marbles.length - 1; i >= 0; i--) {
-            const marble = state.marbles[i];
-            const rank = winningRank - (state.marbles.length - 1 - i);
-            finalWinners.push({
-              rank: rank,
-              name: marble.name
-            });
-          }
-          
-          const winnerNamesList = finalWinners.map(w => w.name);
-          
-          console.log('Sending winners to parent:', winnerNamesList);
-          
-          if (window.parent !== window) {
-            window.parent.postMessage({
-              type: 'PINBALL_WINNERS',
-              winners: winnerNamesList
-            }, '*');
-          }
-          
-          for (let i = 0; i < 200; i++) {
-            particles.push(new Particle(canvas.width / 2, canvas.height / 2));
-          }
+        winnerMarble = state.marbles[0];
+        
+        finalWinners = [];
+        
+        for (let i = state.marbles.length - 1; i >= 0; i--) {
+          const marble = state.marbles[i];
+          const rank = winningRank - (state.marbles.length - 1 - i);
+          finalWinners.push({
+            rank: rank,
+            name: marble.name
+          });
+        }
+        
+        const winnerNamesList = finalWinners.map(w => w.name);
+        
+        console.log('Final winners confirmed:', finalWinners);
+        console.log('Sending to parent:', winnerNamesList);
+        
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: 'PINBALL_WINNERS',
+            winners: winnerNamesList,
+            finished: true
+          }, '*');
+        }
+        
+        for (let i = 0; i < 200; i++) {
+          particles.push(new Particle(canvas.width / 2, canvas.height / 2));
         }
       }
       
@@ -308,21 +297,6 @@ HTML_TEMPLATE = '''
           div.textContent = winner.rank + '위: ' + winner.name;
           list.appendChild(div);
         });
-      } else if (state.marbles && state.marbles.length > 0) {
-        const remaining = totalMarbles - winners.length;
-        state.marbles.forEach((marble, idx) => {
-          const rank = remaining - idx;
-          const div = document.createElement('div');
-          
-          if (hasWinner && winnerNames.includes(marble.name)) {
-            div.className = 'winner-item';
-          } else {
-            div.className = 'winner-item-lost';
-          }
-          
-          div.textContent = rank + '위: ' + marble.name;
-          list.appendChild(div);
-        });
       }
       
       for (let i = winners.length - 1; i >= 0; i--) {
@@ -334,7 +308,7 @@ HTML_TEMPLATE = '''
         list.appendChild(div);
       }
       
-      if (winners.length > 0) {
+      if (winners.length > 0 || lotteryFinished) {
         document.getElementById('winner-display').classList.add('show');
       }
     }

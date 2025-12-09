@@ -254,9 +254,7 @@ HTML_TEMPLATE = '''
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
         winnerMarble = state.marbles[0];
-        console.log('Last marble! Stopping physics...');
-        
-        socket.emit('stop_lottery');
+        console.log('Last marble! Creating particles...');
         
         const finalWinners = [];
         
@@ -280,6 +278,11 @@ HTML_TEMPLATE = '''
         for (let i = 0; i < 200; i++) {
           particles.push(new Particle(canvas.width / 2, canvas.height / 2));
         }
+        
+        setTimeout(() => {
+          console.log('Stopping physics after particles...');
+          socket.emit('stop_lottery');
+        }, 3000);
       }
       
       updateWinnerDisplay(state);

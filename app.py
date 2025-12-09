@@ -61,28 +61,6 @@ HTML_TEMPLATE = '''
     body { background: #000; overflow: hidden; font-family: sans-serif; }
     #canvas { display: block; }
     
-    .time-accelerate-notice {
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: rgba(255, 200, 0, 0.95);
-      color: #000;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-size: 18px;
-      font-weight: bold;
-      box-shadow: 0 4px 15px rgba(255, 200, 0, 0.5);
-      z-index: 1000;
-      display: none;
-      animation: pulse 1.5s infinite;
-    }
-    
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
-    }
-    
     .winner-display {
       position: fixed;
       bottom: 20px;
@@ -97,6 +75,25 @@ HTML_TEMPLATE = '''
       display: none;
     }
     .winner-display.show { display: block; }
+    
+    .time-accelerate-notice {
+      background: rgba(255, 200, 0, 0.95);
+      color: #000;
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      text-align: center;
+      margin-bottom: 15px;
+      display: none;
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
     .winner-display h3 { color: cyan; margin-bottom: 15px; font-size: 22px; text-align: center; }
     .winner-item {
       padding: 10px;
@@ -112,9 +109,9 @@ HTML_TEMPLATE = '''
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
-  <div class="time-accelerate-notice" id="time-notice">1분 30초 경과 시간 가속</div>
   <canvas id="canvas"></canvas>
   <div class="winner-display" id="winner-display">
+    <div class="time-accelerate-notice" id="time-notice">1분 30초 경과 시간 가속</div>
     <h3>순위</h3>
     <div id="winner-list"></div>
   </div>
@@ -405,4 +402,4 @@ HTML_TEMPLATE = '''
 if __name__ == '__main__':
     import os
     port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

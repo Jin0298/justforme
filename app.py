@@ -122,7 +122,7 @@ HTML_TEMPLATE = '''
   <canvas id="canvas"></canvas>
   <div class="winner-display" id="winner-display">
     <div class="time-accelerate-notice" id="time-notice">1분 30초 경과 시간 가속</div>
-    <h3>순위</h3>
+    <h3>🏆 순위</h3>
     <div id="winner-list"></div>
   </div>
 
@@ -271,6 +271,8 @@ HTML_TEMPLATE = '''
           
           const winnerNamesList = finalWinners.map(w => w.name);
           
+          console.log('Sending winners to parent:', winnerNamesList);
+          
           if (window.parent !== window) {
             window.parent.postMessage({
               type: 'PINBALL_WINNERS',
@@ -332,7 +334,7 @@ HTML_TEMPLATE = '''
         list.appendChild(div);
       }
       
-      if (winners.length > 0 || (state.marbles && state.marbles.length > 0)) {
+      if (winners.length > 0) {
         document.getElementById('winner-display').classList.add('show');
       }
     }

@@ -11,40 +11,36 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 physics_engine = None
 
-
 @app.route('/')
 def index():
     names = request.args.get('names', '')
     rank = request.args.get('rank', '')
     return render_template_string(HTML_TEMPLATE, names=names, rank=rank)
 
-
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     emit('connected', {'status': 'ready'})
 
-
 @socketio.on('start_lottery')
 def handle_start(data):
     global physics_engine
     names = data.get('names', [])
-
+    
     print(f'Starting lottery with {len(names)} participants')
     physics_engine = PhysicsEngine(names)
     physics_engine.start()
-
+    
     import threading
     def simulation_loop():
         while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
             state = physics_engine.update()
             socketio.emit('physics_update', state)
             socketio.sleep(0.016)
-
+    
     thread = threading.Thread(target=simulation_loop)
     thread.daemon = True
     thread.start()
-
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -52,7 +48,6 @@ def handle_disconnect():
     global physics_engine
     if physics_engine:
         physics_engine.stop()
-
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -65,6 +60,29 @@ HTML_TEMPLATE = '''
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; font-family: sans-serif; }
     #canvas { display: block; }
+    
+    .time-accelerate-notice {
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(255, 200, 0, 0.95);
+      color: #000;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 18px;
+      font-weight: bold;
+      box-shadow: 0 4px 15px rgba(255, 200, 0, 0.5);
+      z-index: 1000;
+      display: none;
+      animation: pulse 1.5s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    
     .winner-display {
       position: fixed;
       bottom: 20px;
@@ -83,22 +101,18 @@ HTML_TEMPLATE = '''
     .winner-item {
       padding: 10px;
       margin: 8px 0;
-      background: rgba(255,255,255,0.1);
-      border-radius: 6px;
-      font-size: 16px;
-      color: white;
-    }
-    .winner-item.first {
       background: gold;
       color: #000;
+      border-radius: 6px;
+      font-size: 18px;
       font-weight: bold;
-      font-size: 22px;
       text-align: center;
     }
   </style>
   <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
+  <div class="time-accelerate-notice" id="time-notice">1분 30초 경과 시간 가속</div>
   <canvas id="canvas"></canvas>
   <div class="winner-display" id="winner-display">
     <h3>순위</h3>
@@ -108,17 +122,17 @@ HTML_TEMPLATE = '''
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-
+    
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-
+    
     window.addEventListener('resize', () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     });
-
+    
     const socket = io();
-
+    
     let camera = {
       x: 16,
       y: 20,
@@ -126,21 +140,22 @@ HTML_TEMPLATE = '''
       targetY: 20,
       targetZoom: 10
     };
-
+    
     let winners = [];
     let totalMarbles = 0;
     let winningRank = 0;
     let particles = [];
     let hasWinner = false;
     let winnerMarble = null;
-
+    let elapsedTime = 0;
+    
     class Particle {
       constructor(x, y) {
         this.x = x;
         this.y = y;
         this.elapsed = 0;
         this.lifetime = 3000;
-
+        
         const force = Math.random() * 250;
         const ang = (Math.random() * 90 - 180) * Math.PI / 180;
         this.fx = Math.cos(ang) * force;
@@ -148,145 +163,148 @@ HTML_TEMPLATE = '''
         this.hue = Math.random() * 360;
         this.isDestroy = false;
       }
-
+      
       update(deltaTime) {
         this.elapsed += deltaTime;
         this.x += this.fx * (deltaTime / 100);
         this.y += this.fy * (deltaTime / 100);
         this.fy += (10 * deltaTime) / 100;
-
+        
         if (this.elapsed > this.lifetime) {
           this.isDestroy = true;
         }
       }
-
+      
       getAlpha() {
         return 1 - Math.pow(this.elapsed / this.lifetime, 2);
       }
     }
-
+    
     socket.on('connected', () => {
       console.log('Connected to server');
       const urlParams = new URLSearchParams(window.location.search);
       const namesParam = urlParams.get('names');
       const rankParam = urlParams.get('rank');
-
+      
       if (namesParam) {
         const names = namesParam.split(',').map(n => n.trim()).filter(n => n);
         totalMarbles = names.length;
-
+        
         if (rankParam) {
           winningRank = parseInt(rankParam);
         } else {
           winningRank = 1;
         }
-
+        
         console.log('Total marbles:', totalMarbles, 'Winning rank:', winningRank);
         socket.emit('start_lottery', { names });
       }
     });
-
+    
     socket.on('physics_update', (state) => {
+      if (state.elapsed_time !== undefined) {
+        elapsedTime = state.elapsed_time;
+        const timeNotice = document.getElementById('time-notice');
+        if (elapsedTime > 90 && !hasWinner) {
+          timeNotice.style.display = 'block';
+        } else {
+          timeNotice.style.display = 'none';
+        }
+      }
+      
       if (state.camera) {
         camera.targetY = state.camera.targetY;
         camera.y += (camera.targetY - camera.y) * 0.05;
-
+        
         if (state.camera.targetZoom) {
           camera.targetZoom = state.camera.targetZoom;
           camera.zoom += (camera.targetZoom - camera.zoom) * 0.05;
         }
       }
-
+      
       if (state.winners && state.winners.length > winners.length) {
         winners = state.winners;
-
+        
         const remainingMarbles = totalMarbles - winners.length;
-
+        
         if (remainingMarbles === winningRank && !hasWinner) {
           hasWinner = true;
           console.log('Winner confirmed! Remaining:', remainingMarbles);
-
+          
           if (state.marbles && state.marbles.length > 0) {
             winnerMarble = state.marbles[0];
           }
-
+          
           for (let i = 0; i < 200; i++) {
             particles.push(new Particle(canvas.width / 2, canvas.height / 2));
           }
         }
       }
-
+      
       if (state.total_marbles) {
         totalMarbles = state.total_marbles;
       }
-
+      
       updateWinnerDisplay(state);
       render(state);
     });
-
+    
     function animate() {
       particles.forEach(p => p.update(16));
       particles = particles.filter(p => !p.isDestroy);
       requestAnimationFrame(animate);
     }
     animate();
-
+    
     function updateWinnerDisplay(state) {
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
-
+      
       if (hasWinner && state.marbles && state.marbles.length > 0) {
         const remaining = totalMarbles - winners.length;
         state.marbles.forEach((marble, idx) => {
           const rank = remaining - idx;
           const div = document.createElement('div');
-          if (rank === 1) {
-            div.className = 'winner-item first';
-            div.textContent = '1등: ' + marble.name;
-          } else {
-            div.className = 'winner-item';
-            div.textContent = rank + '등: ' + marble.name;
-            div.style.color = 'hsl(' + marble.hue + ', 100%, 70%)';
-          }
+          div.className = 'winner-item';
+          div.textContent = rank + '위: ' + marble.name;
           list.appendChild(div);
         });
       }
-
+      
       for (let i = winners.length - 1; i >= 0; i--) {
         const winner = winners[i];
         const rank = totalMarbles - i;
         const div = document.createElement('div');
         div.className = 'winner-item';
-        div.textContent = rank + '등: ' + winner.name;
-        div.style.color = 'hsl(' + winner.hue + ', 100%, 70%)';
+        div.textContent = rank + '위: ' + winner.name;
         list.appendChild(div);
       }
-
+      
       if (winners.length > 0) {
         document.getElementById('winner-display').classList.add('show');
       }
     }
-
+    
     function render(state) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-
+      
       if (hasWinner && winnerMarble) {
         camera.targetY = winnerMarble.y;
         camera.targetZoom = 35;
       }
-
+      
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(camera.zoom, camera.zoom);
       ctx.translate(-camera.x, -camera.y);
-
+      
       if (state.walls) {
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 0.2;
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'white';
-
+        
         state.walls.forEach(wall => {
           ctx.beginPath();
           ctx.moveTo(wall[0][0], wall[0][1]);
@@ -297,12 +315,12 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-
+      
       if (state.pins) {
         ctx.fillStyle = 'cyan';
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
-
+        
         state.pins.forEach(pin => {
           ctx.save();
           ctx.translate(pin.x, pin.y);
@@ -312,12 +330,12 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-
+      
       if (state.boxes) {
         ctx.fillStyle = 'cyan';
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
-
+        
         state.boxes.forEach(box => {
           ctx.save();
           ctx.translate(box.x, box.y);
@@ -327,7 +345,7 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-
+      
       if (state.skill_effects) {
         state.skill_effects.forEach(effect => {
           ctx.save();
@@ -340,13 +358,13 @@ HTML_TEMPLATE = '''
           ctx.restore();
         });
       }
-
+      
       if (state.marbles) {
         state.marbles.forEach(marble => {
           ctx.save();
           ctx.translate(marble.x, marble.y);
           ctx.rotate(marble.angle);
-
+          
           ctx.fillStyle = 'hsl(' + marble.hue + ', 100%, 70%)';
           ctx.shadowBlur = 10;
           ctx.shadowColor = 'hsl(' + marble.hue + ', 100%, 70%)';
@@ -354,7 +372,7 @@ HTML_TEMPLATE = '''
           ctx.arc(0, 0, 0.25, 0, Math.PI * 2);
           ctx.fill();
           ctx.shadowBlur = 0;
-
+          
           ctx.rotate(-marble.angle);
           ctx.scale(1/camera.zoom, 1/camera.zoom);
           ctx.fillStyle = '#fff';
@@ -364,13 +382,13 @@ HTML_TEMPLATE = '''
           ctx.lineWidth = 3;
           ctx.strokeText(marble.name, 0, 20);
           ctx.fillText(marble.name, 0, 20);
-
+          
           ctx.restore();
         });
       }
-
+      
       ctx.restore();
-
+      
       particles.forEach(particle => {
         ctx.save();
         ctx.globalAlpha = particle.getAlpha();

@@ -42,6 +42,12 @@ def handle_start(data):
     thread.daemon = True
     thread.start()
 
+@socketio.on('stop_lottery')
+def handle_stop():
+    global physics_engine
+    if physics_engine:
+        physics_engine.stop()
+
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
@@ -248,15 +254,21 @@ HTML_TEMPLATE = '''
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
         winnerMarble = state.marbles[0];
-        console.log('Lottery finished! Last marble:', winnerMarble.name);
+        console.log('Last marble! Stopping physics...');
+        
+        socket.emit('stop_lottery');
         
         const finalWinners = [];
+        
         for (let i = winnerStartIndex; i < winners.length; i++) {
           finalWinners.push(winners[i].name);
         }
+        
         finalWinners.push(winnerMarble.name);
         
-        console.log('Final winners list:', finalWinners);
+        finalWinners.reverse();
+        
+        console.log('Final winners (1위→10위):', finalWinners);
         
         if (window.parent !== window) {
           window.parent.postMessage({
@@ -285,6 +297,13 @@ HTML_TEMPLATE = '''
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
       
+      if (lotteryFinished && winnerMarble) {
+        const div = document.createElement('div');
+        div.className = 'winner-item';
+        div.textContent = '1위: ' + winnerMarble.name;
+        list.appendChild(div);
+      }
+      
       for (let i = winners.length - 1; i >= 0; i--) {
         const winner = winners[i];
         const rank = totalMarbles - i;
@@ -299,13 +318,6 @@ HTML_TEMPLATE = '''
           div.textContent = rank + '위: ' + winner.name;
         }
         
-        list.appendChild(div);
-      }
-      
-      if (lotteryFinished && state.marbles && state.marbles.length > 0) {
-        const div = document.createElement('div');
-        div.className = 'winner-item';
-        div.textContent = '1위: ' + state.marbles[0].name;
         list.appendChild(div);
       }
       

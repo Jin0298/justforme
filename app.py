@@ -155,6 +155,7 @@ HTML_TEMPLATE = '''
     let hasWinner = false;
     let winnerMarble = null;
     let elapsedTime = 0;
+    let finalWinners = [];
     
     class Particle {
       constructor(x, y) {
@@ -241,7 +242,18 @@ HTML_TEMPLATE = '''
           if (state.marbles && state.marbles.length > 0) {
             winnerMarble = state.marbles[0];
             
-            const winnerNamesList = state.marbles.map(m => m.name);
+            const remaining = totalMarbles - winners.length;
+            finalWinners = [];
+            for (let i = state.marbles.length - 1; i >= 0; i--) {
+              const marble = state.marbles[i];
+              const rank = remaining - (state.marbles.length - 1 - i);
+              finalWinners.push({
+                rank: rank,
+                name: marble.name
+              });
+            }
+            
+            const winnerNamesList = finalWinners.map(w => w.name);
             
             if (window.parent !== window) {
               window.parent.postMessage({
@@ -276,12 +288,19 @@ HTML_TEMPLATE = '''
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
       
-      if (hasWinner && state.marbles && state.marbles.length > 0) {
+      if (hasWinner && finalWinners.length > 0) {
+        finalWinners.forEach(winner => {
+          const div = document.createElement('div');
+          div.className = 'winner-item';
+          div.textContent = winner.rank + '위: ' + winner.name;
+          list.appendChild(div);
+        });
+      } else if (state.marbles && state.marbles.length > 0 && !hasWinner) {
         const remaining = totalMarbles - winners.length;
         state.marbles.forEach((marble, idx) => {
           const rank = remaining - idx;
           const div = document.createElement('div');
-          div.className = 'winner-item';
+          div.className = 'winner-item-lost';
           div.textContent = rank + '위: ' + marble.name;
           list.appendChild(div);
         });
@@ -296,7 +315,7 @@ HTML_TEMPLATE = '''
         list.appendChild(div);
       }
       
-      if (winners.length > 0) {
+      if (winners.length > 0 || (state.marbles && state.marbles.length > 0)) {
         document.getElementById('winner-display').classList.add('show');
       }
     }

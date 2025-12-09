@@ -156,6 +156,7 @@ HTML_TEMPLATE = '''
     let winnerMarble = null;
     let elapsedTime = 0;
     let finalWinners = [];
+    let lotteryFinished = false;
     
     class Particle {
       constructor(x, y) {
@@ -213,7 +214,7 @@ HTML_TEMPLATE = '''
       if (state.elapsed_time !== undefined) {
         elapsedTime = state.elapsed_time;
         const timeNotice = document.getElementById('time-notice');
-        if (elapsedTime > 90 && !hasWinner) {
+        if (elapsedTime > 90 && !lotteryFinished) {
           timeNotice.style.display = 'block';
         } else {
           timeNotice.style.display = 'none';
@@ -232,45 +233,45 @@ HTML_TEMPLATE = '''
       
       if (state.winners && state.winners.length > winners.length) {
         winners = state.winners;
+      }
+      
+      if (state.total_marbles) {
+        totalMarbles = state.total_marbles;
+      }
+      
+      const remainingMarbles = totalMarbles - winners.length;
+      
+      if (!lotteryFinished && state.is_running === false && remainingMarbles === winningRank) {
+        lotteryFinished = true;
+        hasWinner = true;
+        console.log('Lottery finished! Final winners:', remainingMarbles);
         
-        const remainingMarbles = totalMarbles - winners.length;
-        
-        if (remainingMarbles === winningRank && !hasWinner) {
-          hasWinner = true;
-          console.log('Winner confirmed! Remaining:', remainingMarbles);
+        if (state.marbles && state.marbles.length > 0) {
+          winnerMarble = state.marbles[0];
           
-          if (state.marbles && state.marbles.length > 0) {
-            winnerMarble = state.marbles[0];
-            
-            const remaining = totalMarbles - winners.length;
-            finalWinners = [];
-            for (let i = state.marbles.length - 1; i >= 0; i--) {
-              const marble = state.marbles[i];
-              const rank = remaining - (state.marbles.length - 1 - i);
-              finalWinners.push({
-                rank: rank,
-                name: marble.name
-              });
-            }
-            
-            const winnerNamesList = finalWinners.map(w => w.name);
-            
-            if (window.parent !== window) {
-              window.parent.postMessage({
-                type: 'PINBALL_WINNERS',
-                winners: winnerNamesList
-              }, '*');
-            }
+          finalWinners = [];
+          for (let i = state.marbles.length - 1; i >= 0; i--) {
+            const marble = state.marbles[i];
+            const rank = winningRank - (state.marbles.length - 1 - i);
+            finalWinners.push({
+              rank: rank,
+              name: marble.name
+            });
+          }
+          
+          const winnerNamesList = finalWinners.map(w => w.name);
+          
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              type: 'PINBALL_WINNERS',
+              winners: winnerNamesList
+            }, '*');
           }
           
           for (let i = 0; i < 200; i++) {
             particles.push(new Particle(canvas.width / 2, canvas.height / 2));
           }
         }
-      }
-      
-      if (state.total_marbles) {
-        totalMarbles = state.total_marbles;
       }
       
       updateWinnerDisplay(state);
@@ -288,14 +289,14 @@ HTML_TEMPLATE = '''
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
       
-      if (hasWinner && finalWinners.length > 0) {
+      if (lotteryFinished && finalWinners.length > 0) {
         finalWinners.forEach(winner => {
           const div = document.createElement('div');
           div.className = 'winner-item';
           div.textContent = winner.rank + '위: ' + winner.name;
           list.appendChild(div);
         });
-      } else if (state.marbles && state.marbles.length > 0 && !hasWinner) {
+      } else if (state.marbles && state.marbles.length > 0 && !lotteryFinished) {
         const remaining = totalMarbles - winners.length;
         state.marbles.forEach((marble, idx) => {
           const rank = remaining - idx;
@@ -324,7 +325,7 @@ HTML_TEMPLATE = '''
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       
-      if (hasWinner && winnerMarble) {
+      if (lotteryFinished && winnerMarble) {
         camera.targetY = winnerMarble.y;
         camera.targetZoom = 35;
       }

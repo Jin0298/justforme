@@ -106,8 +106,13 @@ class PhysicsEngine:
         self.camera_target_zoom = 10
 
         self.particle_manager = ParticleManager()
-        self.skill_effects = []  # 충격파 효과들
+        self.skill_effects = []
         self.winner_found = False
+
+        # ⭐ 시간 추적 및 골인 순서
+        self.elapsed_time = 0
+        self.is_time_accelerated = False
+        self.goal_order = []  # 골인 순서 (먼저 골인한 순서대로)
 
         self.create_map()
         self.create_marbles()
@@ -239,10 +244,9 @@ class PhysicsEngine:
 
             self.space.add(body, shape)
 
-            # ⭐ 원본과 동일한 weight 계산
-            weight = 0.1 + (mass - 1)  # 0.1~1.1
-            max_cooltime = 1000 + (1 - weight) * 4000  # 600~4600ms
-            skill_rate = 0.05 * weight  # 0.02~0.22 (2%~22%)
+            weight = 0.1 + (mass - 1)
+            max_cooltime = 1000 + (1 - weight) * 4000
+            skill_rate = 0.05 * weight
 
             self.marbles.append({
                 'body': body,
@@ -258,6 +262,9 @@ class PhysicsEngine:
     def start(self):
         self.is_running = True
         self.winner_found = False
+        self.elapsed_time = 0
+        self.is_time_accelerated = False
+        self.goal_order = []
         for marble in self.marbles:
             marble['body'].activate()
 
@@ -274,24 +281,19 @@ class PhysicsEngine:
 
             target_pos = marble['body'].position
 
-            # 거리 계산
             dx = target_pos.x - src_pos.x
             dy = target_pos.y - src_pos.y
             dist_sq = dx * dx + dy * dy
 
-            # 거리 100 이내에만 영향
             if dist_sq < 100:
                 dist = math.sqrt(dist_sq)
                 if dist > 0.01:
-                    # 정규화
                     nx = dx / dist
                     ny = dy / dist
 
-                    # 힘 계산
                     power = 1 - dist / 10
                     force = power * power * 5
 
-                    # ⭐ 1.5배
                     impulse = (nx * force * 2, ny * force * 2)
                     marble['body'].apply_impulse_at_world_point(
                         impulse,
@@ -306,7 +308,16 @@ class PhysicsEngine:
             self.skill_effects = [e for e in self.skill_effects if not e.is_destroy]
             return self.get_state()
 
-        self.space.step(0.0125)
+        # ⭐ 시간 가속 체크 (90초 = 90000ms)
+        self.elapsed_time += 10  # 10ms씩 증가
+        
+        step_time = 0.0125
+        if self.elapsed_time >= 90000:
+            if not self.is_time_accelerated:
+                self.is_time_accelerated = True
+            step_time = 0.0150
+        
+        self.space.step(step_time)
 
         for wheel in self.wheels:
             wheel['body'].angular_velocity = wheel['vel']
@@ -320,21 +331,17 @@ class PhysicsEngine:
                 if speed < 0.5:
                     body.apply_impulse_at_local_point((random.uniform(-0.1, 0.1), 0.1))
 
-                # 스킬 쿨타임 감소
                 marble['cooltime'] -= 10
 
-                # 쿨타임 끝나면 랜덤하게 Impact 스킬 발동
                 if marble['cooltime'] <= 0:
                     if random.random() < marble['skill_rate']:
-                        # 충격파 발동!
                         pos = marble['body'].position
                         self.skill_effects.append(SkillEffect(pos.x, pos.y))
                         self.apply_impact(marble)
 
-                    # 쿨타임 리셋
                     marble['cooltime'] = marble['max_cooltime']
 
-        # 골인 체크
+        # ⭐ 골인 체크 (골인 순서 기록)
         for marble in self.marbles:
             if marble['finished']:
                 continue
@@ -343,6 +350,12 @@ class PhysicsEngine:
             if pos.y > self.GOAL_Y:
                 marble['finished'] = True
                 self.space.remove(marble['body'], marble['shape'])
+
+                # 골인 순서 기록 (먼저 골인한 순서대로)
+                self.goal_order.append({
+                    'name': marble['name'],
+                    'hue': marble['hue']
+                })
 
                 self.winners.append({
                     'name': marble['name'],
@@ -461,9 +474,12 @@ class PhysicsEngine:
             'winners': self.winners,
             'total_marbles': len(self.marbles),
             'particles': self.particle_manager.get_data(),
-            'skill_effects': [e.get_data() for e in self.skill_effects],  # 충격파!
+            'skill_effects': [e.get_data() for e in self.skill_effects],
             'camera': {
                 'targetY': self.camera_target_y,
                 'targetZoom': self.camera_target_zoom
-            }
+            },
+            'is_time_accelerated': self.is_time_accelerated,  # ⭐ 시간 가속 상태
+            'elapsed_time': self.elapsed_time,  # ⭐ 경과 시간
+            'goal_order': self.goal_order  # ⭐ 골인 순서
         }

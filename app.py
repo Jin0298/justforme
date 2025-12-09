@@ -122,7 +122,7 @@ HTML_TEMPLATE = '''
   <canvas id="canvas"></canvas>
   <div class="winner-display" id="winner-display">
     <div class="time-accelerate-notice" id="time-notice">1분 30초 경과 시간 가속</div>
-    <h3>🏆 순위</h3>
+    <h3>순위</h3>
     <div id="winner-list"></div>
   </div>
 
@@ -240,6 +240,15 @@ HTML_TEMPLATE = '''
           
           if (state.marbles && state.marbles.length > 0) {
             winnerMarble = state.marbles[0];
+            
+            const winnerNamesList = state.marbles.map(m => m.name);
+            
+            if (window.parent !== window) {
+              window.parent.postMessage({
+                type: 'PINBALL_WINNERS',
+                winners: winnerNamesList
+              }, '*');
+            }
           }
           
           for (let i = 0; i < 200; i++) {

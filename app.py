@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
 import json
+import uuid
 from physics_engine import PhysicsEngine
 
 app = Flask(__name__)
@@ -9,51 +10,80 @@ app.config['SECRET_KEY'] = 'roulette-secret'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-physics_engine = None
+# 세션별 PhysicsEngine 저장소
+active_sessions = {}
 
 @app.route('/')
 def index():
     names = request.args.get('names', '')
     rank = request.args.get('rank', '')
-    return render_template_string(HTML_TEMPLATE, names=names, rank=rank)
+    session_id = request.args.get('session_id', '')
+    return render_template_string(HTML_TEMPLATE, names=names, rank=rank, session_id=session_id)
 
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     emit('connected', {'status': 'ready'})
 
+@socketio.on('rejoin_session')
+def handle_rejoin(data):
+    """기존 세션에 재접속"""
+    session_id = data.get('session_id')
+    if session_id and session_id in active_sessions:
+        print(f'Client rejoined session: {session_id}')
+        engine = active_sessions[session_id]
+        emit('session_restored', {'success': True})
+        
+        # 기존 물리 엔진이 계속 돌고 있으므로 별도 처리 불필요
+    else:
+        print(f'Session not found: {session_id}')
+        emit('session_restored', {'success': False})
+
 @socketio.on('start_lottery')
 def handle_start(data):
-    global physics_engine
     names = data.get('names', [])
+    session_id = data.get('session_id', str(uuid.uuid4()))
     
-    print(f'Starting lottery with {len(names)} participants')
-    physics_engine = PhysicsEngine(names)
-    physics_engine.start()
+    # 기존 세션이 있으면 재사용
+    if session_id in active_sessions:
+        print(f'Reusing existing session: {session_id}')
+        physics_engine = active_sessions[session_id]
+    else:
+        print(f'Starting new lottery session: {session_id} with {len(names)} participants')
+        physics_engine = PhysicsEngine(names)
+        active_sessions[session_id] = physics_engine
+        physics_engine.start()
+        
+        import threading
+        def simulation_loop():
+            while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
+                state = physics_engine.update()
+                socketio.emit('physics_update', state)
+                socketio.sleep(0.016)
+            
+            # 게임 종료 후 5분 뒤 세션 삭제
+            import time
+            time.sleep(300)
+            if session_id in active_sessions:
+                del active_sessions[session_id]
+                print(f'Session cleaned up: {session_id}')
+        
+        thread = threading.Thread(target=simulation_loop)
+        thread.daemon = True
+        thread.start()
     
-    import threading
-    def simulation_loop():
-        while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
-            state = physics_engine.update()
-            socketio.emit('physics_update', state)
-            socketio.sleep(0.016)
-    
-    thread = threading.Thread(target=simulation_loop)
-    thread.daemon = True
-    thread.start()
+    emit('session_started', {'session_id': session_id})
 
 @socketio.on('stop_lottery')
 def handle_stop():
-    global physics_engine
-    if physics_engine:
-        physics_engine.stop()
+    # 모든 활성 세션 중지 (관리자용)
+    for session_id, engine in list(active_sessions.items()):
+        engine.stop()
 
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
-    global physics_engine
-    if physics_engine:
-        physics_engine.stop()
+    # 세션은 유지 (다른 클라이언트가 볼 수 있음)
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -193,6 +223,7 @@ HTML_TEMPLATE = '''
     let lotteryFinished = false;
     let winnerMarble = null;
     let winnerStartIndex = -1;
+    let currentSessionId = '{{ session_id }}' || null;
     
     class Particle {
       constructor(x, y) {
@@ -230,6 +261,14 @@ HTML_TEMPLATE = '''
       const urlParams = new URLSearchParams(window.location.search);
       const namesParam = urlParams.get('names');
       const rankParam = urlParams.get('rank');
+      const sessionParam = urlParams.get('session_id');
+      
+      // 세션 ID 복원 시도
+      if (sessionParam) {
+        currentSessionId = sessionParam;
+        console.log('Attempting to rejoin session:', currentSessionId);
+        socket.emit('rejoin_session', { session_id: currentSessionId });
+      }
       
       if (namesParam) {
         const names = namesParam.split(',').map(n => n.trim()).filter(n => n);
@@ -242,7 +281,23 @@ HTML_TEMPLATE = '''
         }
         
         console.log('Total marbles:', totalMarbles, 'Winning rank:', winningRank);
-        socket.emit('start_lottery', { names });
+        socket.emit('start_lottery', { 
+          names: names,
+          session_id: currentSessionId 
+        });
+      }
+    });
+    
+    socket.on('session_started', (data) => {
+      currentSessionId = data.session_id;
+      console.log('Session ID:', currentSessionId);
+    });
+    
+    socket.on('session_restored', (data) => {
+      if (data.success) {
+        console.log('✅ Session restored successfully!');
+      } else {
+        console.log('⚠️ Session not found, will start new game');
       }
     });
     

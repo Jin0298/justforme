@@ -30,13 +30,10 @@ def handle_rejoin(data):
     """기존 세션에 재접속"""
     session_id = data.get('session_id')
     if session_id and session_id in active_sessions:
-        print(f'Client rejoined session: {session_id}')
-        engine = active_sessions[session_id]
+        print(f'✅ Client rejoined session: {session_id}')
         emit('session_restored', {'success': True})
-        
-        # 기존 물리 엔진이 계속 돌고 있으므로 별도 처리 불필요
     else:
-        print(f'Session not found: {session_id}')
+        print(f'❌ Session not found: {session_id}')
         emit('session_restored', {'success': False})
 
 @socketio.on('start_lottery')
@@ -44,33 +41,36 @@ def handle_start(data):
     names = data.get('names', [])
     session_id = data.get('session_id', str(uuid.uuid4()))
     
-    # 기존 세션이 있으면 재사용
+    # 기존 세션이 있으면 재사용 (새로고침 시 게임 이어가기)
     if session_id in active_sessions:
-        print(f'Reusing existing session: {session_id}')
+        print(f'♻️ Reusing existing session: {session_id}')
         physics_engine = active_sessions[session_id]
-    else:
-        print(f'Starting new lottery session: {session_id} with {len(names)} participants')
-        physics_engine = PhysicsEngine(names)
-        active_sessions[session_id] = physics_engine
-        physics_engine.start()
+        emit('session_started', {'session_id': session_id})
+        return
+    
+    # 새 세션 생성
+    print(f'🆕 Starting new lottery session: {session_id} with {len(names)} participants')
+    physics_engine = PhysicsEngine(names)
+    active_sessions[session_id] = physics_engine
+    physics_engine.start()
+    
+    import threading
+    def simulation_loop():
+        while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
+            state = physics_engine.update()
+            socketio.emit('physics_update', state)
+            socketio.sleep(0.016)
         
-        import threading
-        def simulation_loop():
-            while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
-                state = physics_engine.update()
-                socketio.emit('physics_update', state)
-                socketio.sleep(0.016)
-            
-            # 게임 종료 후 5분 뒤 세션 삭제
-            import time
-            time.sleep(300)
-            if session_id in active_sessions:
-                del active_sessions[session_id]
-                print(f'Session cleaned up: {session_id}')
-        
-        thread = threading.Thread(target=simulation_loop)
-        thread.daemon = True
-        thread.start()
+        # 게임 종료 후 5분 뒤 세션 삭제
+        import time
+        time.sleep(300)
+        if session_id in active_sessions:
+            del active_sessions[session_id]
+            print(f'🗑️ Session cleaned up: {session_id}')
+    
+    thread = threading.Thread(target=simulation_loop)
+    thread.daemon = True
+    thread.start()
     
     emit('session_started', {'session_id': session_id})
 
@@ -82,8 +82,7 @@ def handle_stop():
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
-    # 세션은 유지 (다른 클라이언트가 볼 수 있음)
+    print('Client disconnected (session kept alive)')
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -257,7 +256,7 @@ HTML_TEMPLATE = '''
     }
     
     socket.on('connected', () => {
-      console.log('Connected to server');
+      console.log('🔌 Connected to server');
       const urlParams = new URLSearchParams(window.location.search);
       const namesParam = urlParams.get('names');
       const rankParam = urlParams.get('rank');
@@ -266,7 +265,7 @@ HTML_TEMPLATE = '''
       // 세션 ID 복원 시도
       if (sessionParam) {
         currentSessionId = sessionParam;
-        console.log('Attempting to rejoin session:', currentSessionId);
+        console.log('🔄 Attempting to rejoin session:', currentSessionId);
         socket.emit('rejoin_session', { session_id: currentSessionId });
       }
       
@@ -280,7 +279,7 @@ HTML_TEMPLATE = '''
           winningRank = 1;
         }
         
-        console.log('Total marbles:', totalMarbles, 'Winning rank:', winningRank);
+        console.log('👥 Total marbles:', totalMarbles, '🏆 Winning rank:', winningRank);
         socket.emit('start_lottery', { 
           names: names,
           session_id: currentSessionId 
@@ -290,14 +289,14 @@ HTML_TEMPLATE = '''
     
     socket.on('session_started', (data) => {
       currentSessionId = data.session_id;
-      console.log('Session ID:', currentSessionId);
+      console.log('✅ Session ID:', currentSessionId);
     });
     
     socket.on('session_restored', (data) => {
       if (data.success) {
-        console.log('✅ Session restored successfully!');
+        console.log('✅ Session restored! Game continues...');
       } else {
-        console.log('⚠️ Session not found, will start new game');
+        console.log('⚠️ Session not found, starting new game');
       }
     });
     
@@ -334,13 +333,13 @@ HTML_TEMPLATE = '''
       
       if (winnerStartIndex === -1 && remainingMarbles === winningRank) {
         winnerStartIndex = winners.length;
-        console.log('Winners start at index:', winnerStartIndex);
+        console.log('🎯 Winners start at index:', winnerStartIndex);
       }
       
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
         winnerMarble = state.marbles[0];
-        console.log('Last marble! Creating particles...');
+        console.log('🎉 Last marble! Creating particles...');
         
         const finalWinners = [];
         
@@ -352,7 +351,7 @@ HTML_TEMPLATE = '''
         
         finalWinners.reverse();
         
-        console.log('Final winners (1위→10위):', finalWinners);
+        console.log('🏆 Final winners (1위→end):', finalWinners);
         
         if (window.parent !== window) {
           window.parent.postMessage({
@@ -366,7 +365,7 @@ HTML_TEMPLATE = '''
         }
         
         setTimeout(() => {
-          console.log('Stopping physics after particles...');
+          console.log('⏸️ Stopping physics after particles...');
           socket.emit('stop_lottery');
         }, 3000);
       }

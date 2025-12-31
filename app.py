@@ -1,5 +1,5 @@
-from flask import Flask, render_template_string, request
-from flask_socketio import SocketIO, emit
+from flask import Flask, render_template_string, request, jsonify
+from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
 import json
 import uuid
@@ -10,8 +10,9 @@ app.config['SECRET_KEY'] = 'roulette-secret'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 세션별 PhysicsEngine 저장소 1
+# 세션별 PhysicsEngine 저장소
 active_sessions = {}
+
 
 @app.route('/')
 def index():
@@ -20,80 +21,107 @@ def index():
     session_id = request.args.get('session_id', '')
     return render_template_string(HTML_TEMPLATE, names=names, rank=rank, session_id=session_id)
 
+
+# ✅ 추가: Google Apps Script에서 호출할 HTTP 종료 API
+@app.route('/stop_lottery_http', methods=['POST'])
+def stop_lottery_http():
+    data = request.json
+    session_id = data.get('session_id')
+    if session_id in active_sessions:
+        active_sessions[session_id].stop()
+        del active_sessions[session_id]
+        print(f'🛑 Session stopped by admin: {session_id}')
+        return jsonify({"success": True}), 200
+    return jsonify({"success": False, "message": "Session not found"}), 404
+
+
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     emit('connected', {'status': 'ready'})
 
+
+# ✅ 추가: 클라이언트를 특정 세션 룸에 입장시킴
+@socketio.on('join')
+def on_join(data):
+    session_id = data.get('session_id')
+    if session_id:
+        join_room(session_id)
+        print(f'👥 Client joined room: {session_id}')
+
+
 @socketio.on('rejoin_session')
 def handle_rejoin(data):
     """기존 세션에 재접속"""
     session_id = data.get('session_id')
-    if session_id and session_id in active_sessions:
-        print(f'✅ Client rejoined session: {session_id}')
-        emit('session_restored', {'success': True})
-    else:
-        print(f'❌ Session not found: {session_id}')
-        emit('session_restored', {'success': False})
+    if session_id:
+        join_room(session_id)  # ✅ Room에도 입장
+        if session_id in active_sessions:
+            print(f'✅ Client rejoined session: {session_id}')
+            emit('session_restored', {'success': True})
+        else:
+            print(f'❌ Session not found: {session_id}')
+            emit('session_restored', {'success': False})
+
 
 @socketio.on('start_lottery')
 def handle_start(data):
     names = data.get('names', [])
     session_id = data.get('session_id', str(uuid.uuid4()))
-    
-    # 기존 세션이 있으면 삭제하고 새로 시작
+
+    # ✅ 이미 실행중이면 무시 (새로고침 시 중복 시작 방지)
     if session_id in active_sessions:
-        print(f'🔄 Removing old session and starting fresh: {session_id}')
-        old_engine = active_sessions[session_id]
-        old_engine.stop()
-        del active_sessions[session_id]
-    
-    # 새 세션 생성
+        print(f'⚠️ Session {session_id} already running, ignoring duplicate start')
+        return
+
+    # 새로운 세션 생성
     print(f'🆕 Starting new lottery session: {session_id} with {len(names)} participants')
     physics_engine = PhysicsEngine(names)
     active_sessions[session_id] = physics_engine
     physics_engine.start()
-    
+
     import threading
     def simulation_loop():
         while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
             state = physics_engine.update()
-            socketio.emit('physics_update', state)
+            # ✅ 수정: 특정 세션 룸에만 전송
+            socketio.emit('physics_update', state, to=session_id)
             socketio.sleep(0.016)
-        
+
         # 게임 종료 후 5분 뒤 세션 삭제
         import time
         time.sleep(300)
         if session_id in active_sessions:
             del active_sessions[session_id]
             print(f'🗑️ Session cleaned up: {session_id}')
-    
+
     thread = threading.Thread(target=simulation_loop)
     thread.daemon = True
     thread.start()
-    
+
     emit('session_started', {'session_id': session_id})
+
 
 @socketio.on('stop_lottery')
 def handle_stop(data=None):
     """추첨 중지 - 세션도 함께 삭제"""
     if data and 'session_id' in data:
-        # 특정 세션만 중지
         session_id = data['session_id']
         if session_id in active_sessions:
             active_sessions[session_id].stop()
             del active_sessions[session_id]
             print(f'🛑 Session stopped and removed: {session_id}')
     else:
-        # 모든 세션 중지 (관리자용)
         for session_id, engine in list(active_sessions.items()):
             engine.stop()
         active_sessions.clear()
         print(f'🛑 All sessions stopped and removed')
 
+
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected (session kept alive)')
+
 
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -106,7 +134,7 @@ HTML_TEMPLATE = '''
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; font-family: sans-serif; }
     #canvas { display: block; }
-    
+
     .winner-display {
       position: fixed;
       bottom: 20px;
@@ -121,7 +149,7 @@ HTML_TEMPLATE = '''
       display: none;
     }
     .winner-display.show { display: block; }
-    
+
     .time-accelerate-notice {
       background: rgba(255, 200, 0, 0.95);
       color: #000;
@@ -134,12 +162,12 @@ HTML_TEMPLATE = '''
       display: none;
       animation: pulse 1.5s infinite;
     }
-    
+
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.7; }
     }
-    
+
     .winner-display h3 { color: cyan; margin-bottom: 15px; font-size: 22px; text-align: center; }
     .winner-item {
       padding: 10px;
@@ -161,7 +189,7 @@ HTML_TEMPLATE = '''
       font-weight: bold;
       text-align: center;
     }
-    
+
     @media (max-width: 768px) {
       .winner-display {
         top: 5px;
@@ -174,18 +202,18 @@ HTML_TEMPLATE = '''
         background: rgba(0,0,0,0.7);
         border-width: 2px;
       }
-      
+
       .winner-display h3 {
         font-size: 14px;
         margin-bottom: 5px;
       }
-      
+
       .winner-item, .winner-item-lost {
         font-size: 11px;
         padding: 5px;
         margin: 3px 0;
       }
-      
+
       .time-accelerate-notice {
         font-size: 10px;
         padding: 5px 8px;
@@ -206,17 +234,17 @@ HTML_TEMPLATE = '''
   <script>
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
-    
+
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
-    
+
     window.addEventListener('resize', () => {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     });
-    
+
     const socket = io();
-    
+
     let camera = {
       x: 16,
       y: 20,
@@ -224,7 +252,7 @@ HTML_TEMPLATE = '''
       targetY: 20,
       targetZoom: 10
     };
-    
+
     let winners = [];
     let totalMarbles = 0;
     let winningRank = 0;
@@ -234,14 +262,14 @@ HTML_TEMPLATE = '''
     let winnerMarble = null;
     let winnerStartIndex = -1;
     let currentSessionId = '{{ session_id }}' || null;
-    
+
     class Particle {
       constructor(x, y) {
         this.x = x;
         this.y = y;
         this.elapsed = 0;
         this.lifetime = 3000;
-        
+
         const force = Math.random() * 250;
         const ang = (Math.random() * 90 - 180) * Math.PI / 180;
         this.fx = Math.cos(ang) * force;
@@ -249,60 +277,64 @@ HTML_TEMPLATE = '''
         this.hue = Math.random() * 360;
         this.isDestroy = false;
       }
-      
+
       update(deltaTime) {
         this.elapsed += deltaTime;
         this.x += this.fx * (deltaTime / 100);
         this.y += this.fy * (deltaTime / 100);
         this.fy += (10 * deltaTime) / 100;
-        
+
         if (this.elapsed > this.lifetime) {
           this.isDestroy = true;
         }
       }
-      
+
       getAlpha() {
         return 1 - Math.pow(this.elapsed / this.lifetime, 2);
       }
     }
-    
+
     socket.on('connected', () => {
       console.log('🔌 Connected to server');
       const urlParams = new URLSearchParams(window.location.search);
       const namesParam = urlParams.get('names');
       const rankParam = urlParams.get('rank');
       const sessionParam = urlParams.get('session_id');
-      
-      // 세션 ID 복원 시도
+
+      // ✅ 먼저 룸에 입장
       if (sessionParam) {
         currentSessionId = sessionParam;
-        console.log('🔄 Attempting to rejoin session:', currentSessionId);
+        socket.emit('join', { session_id: currentSessionId });
+        console.log('👥 Joined room:', currentSessionId);
+
+        // 세션 복원 시도
         socket.emit('rejoin_session', { session_id: currentSessionId });
       }
-      
+
+      // ✅ names가 있을 때만 start_lottery 호출 (서버가 중복 체크함)
       if (namesParam) {
         const names = namesParam.split(',').map(n => n.trim()).filter(n => n);
         totalMarbles = names.length;
-        
+
         if (rankParam) {
           winningRank = parseInt(rankParam);
         } else {
           winningRank = 1;
         }
-        
-        console.log('👥 Total marbles:', totalMarbles, '🏆 Winning rank:', winningRank);
+
+        console.log('💥 Total marbles:', totalMarbles, '🏆 Winning rank:', winningRank);
         socket.emit('start_lottery', { 
           names: names,
           session_id: currentSessionId 
         });
       }
     });
-    
+
     socket.on('session_started', (data) => {
       currentSessionId = data.session_id;
       console.log('✅ Session ID:', currentSessionId);
     });
-    
+
     socket.on('session_restored', (data) => {
       if (data.success) {
         console.log('✅ Session restored! Game continues...');
@@ -310,7 +342,7 @@ HTML_TEMPLATE = '''
         console.log('⚠️ Session not found, starting new game');
       }
     });
-    
+
     socket.on('physics_update', (state) => {
       if (state.elapsed_time !== undefined) {
         elapsedTime = state.elapsed_time;
@@ -321,93 +353,93 @@ HTML_TEMPLATE = '''
           timeNotice.style.display = 'none';
         }
       }
-      
+
       if (state.camera) {
         camera.targetY = state.camera.targetY;
         camera.y += (camera.targetY - camera.y) * 0.05;
-        
+
         if (state.camera.targetZoom) {
           camera.targetZoom = state.camera.targetZoom;
           camera.zoom += (camera.targetZoom - camera.zoom) * 0.05;
         }
       }
-      
+
       if (state.winners && state.winners.length > winners.length) {
         winners = state.winners;
       }
-      
+
       if (state.total_marbles) {
         totalMarbles = state.total_marbles;
       }
-      
+
       const remainingMarbles = totalMarbles - winners.length;
-      
+
       if (winnerStartIndex === -1 && remainingMarbles === winningRank) {
         winnerStartIndex = winners.length;
         console.log('🎯 Winners start at index:', winnerStartIndex);
       }
-      
+
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
         winnerMarble = state.marbles[0];
         console.log('🎉 Last marble! Creating particles...');
-        
+
         const finalWinners = [];
-        
+
         for (let i = winnerStartIndex; i < winners.length; i++) {
           finalWinners.push(winners[i].name);
         }
-        
+
         finalWinners.push(winnerMarble.name);
-        
+
         finalWinners.reverse();
-        
+
         console.log('🏆 Final winners (1위→end):', finalWinners);
-        
+
         if (window.parent !== window) {
           window.parent.postMessage({
             type: 'PINBALL_WINNERS',
             winners: finalWinners
           }, '*');
         }
-        
+
         for (let i = 0; i < 200; i++) {
           particles.push(new Particle(canvas.width / 2, canvas.height / 2));
         }
-        
+
         setTimeout(() => {
           console.log('⏸️ Stopping physics after particles...');
           socket.emit('stop_lottery', { session_id: currentSessionId });
         }, 3000);
       }
-      
+
       updateWinnerDisplay(state);
       render(state);
     });
-    
+
     function animate() {
       particles.forEach(p => p.update(16));
       particles = particles.filter(p => !p.isDestroy);
       requestAnimationFrame(animate);
     }
     animate();
-    
+
     function updateWinnerDisplay(state) {
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
-      
+
       if (lotteryFinished && winnerMarble) {
         const div = document.createElement('div');
         div.className = 'winner-item';
         div.textContent = '1위: ' + winnerMarble.name;
         list.appendChild(div);
       }
-      
+
       for (let i = winners.length - 1; i >= 0; i--) {
         const winner = winners[i];
         const rank = totalMarbles - i;
         const div = document.createElement('div');
-        
+
         if (winnerStartIndex !== -1 && i >= winnerStartIndex) {
           div.className = 'winner-item';
           const winnerRank = winningRank - (i - winnerStartIndex);
@@ -416,35 +448,35 @@ HTML_TEMPLATE = '''
           div.className = 'winner-item-lost';
           div.textContent = rank + '위: ' + winner.name;
         }
-        
+
         list.appendChild(div);
       }
-      
+
       if (winners.length > 0 || lotteryFinished) {
         document.getElementById('winner-display').classList.add('show');
       }
     }
-    
+
     function render(state) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
+
       if (lotteryFinished && winnerMarble) {
         camera.targetY = winnerMarble.y;
         camera.targetZoom = 35;
       }
-      
+
       ctx.save();
       ctx.translate(canvas.width / 2, canvas.height / 2);
       ctx.scale(camera.zoom, camera.zoom);
       ctx.translate(-camera.x, -camera.y);
-      
+
       if (state.walls) {
         ctx.strokeStyle = 'white';
         ctx.lineWidth = 0.2;
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'white';
-        
+
         state.walls.forEach(wall => {
           ctx.beginPath();
           ctx.moveTo(wall[0][0], wall[0][1]);
@@ -455,12 +487,12 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-      
+
       if (state.pins) {
         ctx.fillStyle = 'cyan';
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
-        
+
         state.pins.forEach(pin => {
           ctx.save();
           ctx.translate(pin.x, pin.y);
@@ -470,12 +502,12 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-      
+
       if (state.boxes) {
         ctx.fillStyle = 'cyan';
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
-        
+
         state.boxes.forEach(box => {
           ctx.save();
           ctx.translate(box.x, box.y);
@@ -485,7 +517,7 @@ HTML_TEMPLATE = '''
         });
         ctx.shadowBlur = 0;
       }
-      
+
       if (state.skill_effects) {
         state.skill_effects.forEach(effect => {
           ctx.save();
@@ -498,13 +530,13 @@ HTML_TEMPLATE = '''
           ctx.restore();
         });
       }
-      
+
       if (state.marbles) {
         state.marbles.forEach(marble => {
           ctx.save();
           ctx.translate(marble.x, marble.y);
           ctx.rotate(marble.angle);
-          
+
           ctx.fillStyle = 'hsl(' + marble.hue + ', 100%, 70%)';
           ctx.shadowBlur = 10;
           ctx.shadowColor = 'hsl(' + marble.hue + ', 100%, 70%)';
@@ -512,7 +544,7 @@ HTML_TEMPLATE = '''
           ctx.arc(0, 0, 0.25, 0, Math.PI * 2);
           ctx.fill();
           ctx.shadowBlur = 0;
-          
+
           ctx.rotate(-marble.angle);
           ctx.scale(1/camera.zoom, 1/camera.zoom);
           ctx.fillStyle = '#fff';
@@ -522,13 +554,13 @@ HTML_TEMPLATE = '''
           ctx.lineWidth = 3;
           ctx.strokeText(marble.name, 0, 20);
           ctx.fillText(marble.name, 0, 20);
-          
+
           ctx.restore();
         });
       }
-      
+
       ctx.restore();
-      
+
       particles.forEach(particle => {
         ctx.save();
         ctx.globalAlpha = particle.getAlpha();
@@ -544,5 +576,6 @@ HTML_TEMPLATE = '''
 
 if __name__ == '__main__':
     import os
+
     port = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)

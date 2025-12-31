@@ -347,7 +347,7 @@ HTML_TEMPLATE = '''
       if (state.elapsed_time !== undefined) {
         elapsedTime = state.elapsed_time;
         const timeNotice = document.getElementById('time-notice');
-        if (elapsedTime > 90 && !lotteryFinished) {
+        if (elapsedTime > 60 && !lotteryFinished) {
           timeNotice.style.display = 'block';
         } else {
           timeNotice.style.display = 'none';

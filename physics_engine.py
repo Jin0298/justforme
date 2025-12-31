@@ -296,8 +296,8 @@ class PhysicsEngine:
             self.elapsed_time = time.time() - self.start_time
         
         time_step = 0.0125
-        if self.elapsed_time > 90:
-            time_step = 0.015
+        if self.elapsed_time > 60:
+            time_step = 0.0155
         
         self.space.step(time_step)
         

@@ -41,12 +41,12 @@ def handle_start(data):
     names = data.get('names', [])
     session_id = data.get('session_id', str(uuid.uuid4()))
     
-    # 기존 세션이 있으면 재사용 (새로고침 시 게임 이어가기)
+    # 기존 세션이 있으면 삭제하고 새로 시작
     if session_id in active_sessions:
-        print(f'♻️ Reusing existing session: {session_id}')
-        physics_engine = active_sessions[session_id]
-        emit('session_started', {'session_id': session_id})
-        return
+        print(f'🔄 Removing old session and starting fresh: {session_id}')
+        old_engine = active_sessions[session_id]
+        old_engine.stop()
+        del active_sessions[session_id]
     
     # 새 세션 생성
     print(f'🆕 Starting new lottery session: {session_id} with {len(names)} participants')
@@ -75,10 +75,21 @@ def handle_start(data):
     emit('session_started', {'session_id': session_id})
 
 @socketio.on('stop_lottery')
-def handle_stop():
-    # 모든 활성 세션 중지 (관리자용)
-    for session_id, engine in list(active_sessions.items()):
-        engine.stop()
+def handle_stop(data=None):
+    """추첨 중지 - 세션도 함께 삭제"""
+    if data and 'session_id' in data:
+        # 특정 세션만 중지
+        session_id = data['session_id']
+        if session_id in active_sessions:
+            active_sessions[session_id].stop()
+            del active_sessions[session_id]
+            print(f'🛑 Session stopped and removed: {session_id}')
+    else:
+        # 모든 세션 중지 (관리자용)
+        for session_id, engine in list(active_sessions.items()):
+            engine.stop()
+        active_sessions.clear()
+        print(f'🛑 All sessions stopped and removed')
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -366,7 +377,7 @@ HTML_TEMPLATE = '''
         
         setTimeout(() => {
           console.log('⏸️ Stopping physics after particles...');
-          socket.emit('stop_lottery');
+          socket.emit('stop_lottery', { session_id: currentSessionId });
         }, 3000);
       }
       

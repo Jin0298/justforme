@@ -10,7 +10,7 @@ app.config['SECRET_KEY'] = 'roulette-secret'
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# 세션별 PhysicsEngine 저장소
+# 세션별 PhysicsEngine 저장소 1
 active_sessions = {}
 
 @app.route('/')

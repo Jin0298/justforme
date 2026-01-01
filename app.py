@@ -144,6 +144,7 @@ HTML_TEMPLATE = '''
       border-radius: 12px;
       border: 3px solid cyan;
       min-width: 280px;
+      max-width: 320px;
       max-height: 500px;
       overflow-y: auto;
       display: none;
@@ -170,24 +171,28 @@ HTML_TEMPLATE = '''
 
     .winner-display h3 { color: cyan; margin-bottom: 15px; font-size: 22px; text-align: center; }
     .winner-item {
-      padding: 10px;
+      padding: 8px;
       margin: 8px 0;
       background: gold;
       color: #000;
       border-radius: 6px;
-      font-size: 18px;
+      font-size: 13px;
       font-weight: bold;
       text-align: center;
+      word-break: break-word;
+      line-height: 1.3;
     }
     .winner-item-lost {
-      padding: 10px;
+      padding: 8px;
       margin: 8px 0;
       background: rgba(100, 100, 100, 0.5);
       color: #ccc;
       border-radius: 6px;
-      font-size: 18px;
+      font-size: 13px;
       font-weight: bold;
       text-align: center;
+      word-break: break-word;
+      line-height: 1.3;
     }
 
     @media (max-width: 768px) {
@@ -209,9 +214,10 @@ HTML_TEMPLATE = '''
       }
 
       .winner-item, .winner-item-lost {
-        font-size: 11px;
+        font-size: 10px;
         padding: 5px;
         margin: 3px 0;
+        line-height: 1.2;
       }
 
       .time-accelerate-notice {

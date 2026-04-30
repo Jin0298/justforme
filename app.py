@@ -1,135 +1,168 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, jsonify, render_template_string, request
 from flask_socketio import SocketIO, emit, join_room
 from flask_cors import CORS
-import json
+import threading
 import uuid
+
 from physics_engine import PhysicsEngine
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'roulette-secret'
+app.config["SECRET_KEY"] = "roulette-secret"
 CORS(app)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
-# 세션별 PhysicsEngine 저장소
 active_sessions = {}
+session_lock = threading.Lock()
 
 
-@app.route('/')
+def get_session(session_id):
+    with session_lock:
+        return active_sessions.get(session_id)
+
+
+def register_session(session_id, engine):
+    with session_lock:
+        if session_id in active_sessions:
+            return False
+        active_sessions[session_id] = engine
+        return True
+
+
+def remove_session(session_id):
+    with session_lock:
+        return active_sessions.pop(session_id, None)
+
+
+@app.route("/")
 def index():
-    names = request.args.get('names', '')
-    rank = request.args.get('rank', '')
-    session_id = request.args.get('session_id', '')
-    return render_template_string(HTML_TEMPLATE, names=names, rank=rank, session_id=session_id)
+    names = request.args.get("names", "")
+    rank = request.args.get("rank", "")
+    session_id = request.args.get("session_id", "")
+    return render_template_string(
+        HTML_TEMPLATE,
+        names=names,
+        rank=rank,
+        session_id=session_id,
+    )
 
 
-# ✅ 추가: Google Apps Script에서 호출할 HTTP 종료 API
-@app.route('/stop_lottery_http', methods=['POST'])
+@app.route("/stop_lottery_http", methods=["POST"])
 def stop_lottery_http():
-    data = request.json
-    session_id = data.get('session_id')
-    if session_id in active_sessions:
-        active_sessions[session_id].stop()
-        del active_sessions[session_id]
-        print(f'🛑 Session stopped by admin: {session_id}')
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id")
+    engine = remove_session(session_id)
+    if engine:
+        engine.stop()
+        print(f"Session stopped by admin: {session_id}")
         return jsonify({"success": True}), 200
     return jsonify({"success": False, "message": "Session not found"}), 404
 
 
-@socketio.on('connect')
+@socketio.on("connect")
 def handle_connect():
-    print('Client connected')
-    emit('connected', {'status': 'ready'})
+    print("Client connected")
+    emit("connected", {"status": "ready"})
 
 
-# ✅ 추가: 클라이언트를 특정 세션 룸에 입장시킴
-@socketio.on('join')
+@socketio.on("join")
 def on_join(data):
-    session_id = data.get('session_id')
-    if session_id:
-        join_room(session_id)
-        print(f'👥 Client joined room: {session_id}')
-
-
-@socketio.on('rejoin_session')
-def handle_rejoin(data):
-    """기존 세션에 재접속"""
-    session_id = data.get('session_id')
-    if session_id:
-        join_room(session_id)  # ✅ Room에도 입장
-        if session_id in active_sessions:
-            print(f'✅ Client rejoined session: {session_id}')
-            emit('session_restored', {'success': True})
-        else:
-            print(f'❌ Session not found: {session_id}')
-            emit('session_restored', {'success': False})
-
-
-@socketio.on('start_lottery')
-def handle_start(data):
-    names = data.get('names', [])
-    session_id = data.get('session_id', str(uuid.uuid4()))
-
-    # ✅ 이미 실행중이면 무시 (새로고침 시 중복 시작 방지)
-    if session_id in active_sessions:
-        print(f'⚠️ Session {session_id} already running, ignoring duplicate start')
+    session_id = data.get("session_id")
+    if not session_id:
         return
 
-    # 새로운 세션 생성
-    print(f'🆕 Starting new lottery session: {session_id} with {len(names)} participants')
+    join_room(session_id)
+    engine = get_session(session_id)
+    if engine:
+        emit("physics_update", engine.get_state())
+    print(f"Client joined room: {session_id}")
+
+
+@socketio.on("rejoin_session")
+def handle_rejoin(data):
+    session_id = data.get("session_id")
+    if not session_id:
+        return
+
+    join_room(session_id)
+    engine = get_session(session_id)
+    if engine:
+        emit("physics_update", engine.get_state())
+        emit("session_restored", {"success": True})
+        print(f"Client rejoined session: {session_id}")
+    else:
+        emit("session_restored", {"success": False})
+        print(f"Session not found: {session_id}")
+
+
+@socketio.on("start_lottery")
+def handle_start(data):
+    names = data.get("names", [])
+    session_id = data.get("session_id") or str(uuid.uuid4())
+
+    if not names:
+        emit("session_error", {"message": "No participants provided"})
+        return
+
+    existing_engine = get_session(session_id)
+    if existing_engine:
+        emit("session_started", {"session_id": session_id})
+        emit("physics_update", existing_engine.get_state())
+        print(f"Session {session_id} already running, ignoring duplicate start")
+        return
+
     physics_engine = PhysicsEngine(names)
-    active_sessions[session_id] = physics_engine
+    if not register_session(session_id, physics_engine):
+        engine = get_session(session_id)
+        emit("session_started", {"session_id": session_id})
+        if engine:
+            emit("physics_update", engine.get_state())
+        return
+
+    print(f"Starting session {session_id} with {len(names)} participants")
     physics_engine.start()
 
-    import threading
     def simulation_loop():
-        while physics_engine.is_running or len(physics_engine.skill_effects) > 0:
+        while True:
             state = physics_engine.update()
-            # ✅ 수정: 특정 세션 룸에만 전송
-            socketio.emit('physics_update', state, to=session_id)
-            socketio.sleep(0.016)
+            socketio.emit("physics_update", state, to=session_id)
+            if not physics_engine.is_running and not physics_engine.skill_effects:
+                break
+            socketio.sleep(0.033)
 
-        # 게임 종료 후 5분 뒤 세션 삭제
-        import time
-        time.sleep(300)
-        if session_id in active_sessions:
-            del active_sessions[session_id]
-            print(f'🗑️ Session cleaned up: {session_id}')
+        remove_session(session_id)
+        socketio.emit("session_closed", {"session_id": session_id}, to=session_id)
+        print(f"Session cleaned up: {session_id}")
 
-    thread = threading.Thread(target=simulation_loop)
-    thread.daemon = True
+    thread = threading.Thread(target=simulation_loop, daemon=True)
     thread.start()
 
-    emit('session_started', {'session_id': session_id})
+    emit("session_started", {"session_id": session_id})
 
 
-@socketio.on('stop_lottery')
+@socketio.on("stop_lottery")
 def handle_stop(data=None):
-    """추첨 중지 - 세션도 함께 삭제"""
-    if data and 'session_id' in data:
-        session_id = data['session_id']
-        if session_id in active_sessions:
-            active_sessions[session_id].stop()
-            del active_sessions[session_id]
-            print(f'🛑 Session stopped and removed: {session_id}')
-    else:
-        for session_id, engine in list(active_sessions.items()):
+    if data and "session_id" in data:
+        session_id = data["session_id"]
+        engine = get_session(session_id)
+        if engine:
             engine.stop()
-        active_sessions.clear()
-        print(f'🛑 All sessions stopped and removed')
+            print(f"Session stopping requested: {session_id}")
+    else:
+        print("stop_lottery called without session_id, ignoring")
 
 
-@socketio.on('disconnect')
+@socketio.on("disconnect")
 def handle_disconnect():
-    print('Client disconnected (session kept alive)')
+    print("Client disconnected (session kept alive)")
 
 
-HTML_TEMPLATE = '''
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>핀볼 추첨</title>
+  <title>Pinball Lottery</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; font-family: sans-serif; }
@@ -232,8 +265,8 @@ HTML_TEMPLATE = '''
 <body>
   <canvas id="canvas"></canvas>
   <div class="winner-display" id="winner-display">
-    <div class="time-accelerate-notice" id="time-notice">1분 경과 시간 가속</div>
-    <h3>순위</h3>
+    <div class="time-accelerate-notice" id="time-notice">1 minute elapsed, speeding up</div>
+    <h3>Ranking</h3>
     <div id="winner-list"></div>
   </div>
 
@@ -268,6 +301,7 @@ HTML_TEMPLATE = '''
     let winnerMarble = null;
     let winnerStartIndex = -1;
     let currentSessionId = '{{ session_id }}' || null;
+    let stopRequested = false;
 
     class Particle {
       constructor(x, y) {
@@ -301,63 +335,41 @@ HTML_TEMPLATE = '''
     }
 
     socket.on('connected', () => {
-      console.log('🔌 Connected to server');
       const urlParams = new URLSearchParams(window.location.search);
       const namesParam = urlParams.get('names');
       const rankParam = urlParams.get('rank');
       const sessionParam = urlParams.get('session_id');
 
-      // ✅ 먼저 룸에 입장
       if (sessionParam) {
         currentSessionId = sessionParam;
         socket.emit('join', { session_id: currentSessionId });
-        console.log('👥 Joined room:', currentSessionId);
-
-        // 세션 복원 시도
         socket.emit('rejoin_session', { session_id: currentSessionId });
       }
 
-      // ✅ names가 있을 때만 start_lottery 호출 (서버가 중복 체크함)
       if (namesParam) {
-        const names = namesParam.split(',').map(n => n.trim()).filter(n => n);
+        const names = namesParam.split(',').map((n) => n.trim()).filter((n) => n);
         totalMarbles = names.length;
-
-        if (rankParam) {
-          winningRank = parseInt(rankParam);
-        } else {
-          winningRank = 1;
-        }
-
-        console.log('💥 Total marbles:', totalMarbles, '🏆 Winning rank:', winningRank);
-        socket.emit('start_lottery', { 
-          names: names,
-          session_id: currentSessionId 
+        winningRank = rankParam ? parseInt(rankParam, 10) : 1;
+        socket.emit('start_lottery', {
+          names,
+          session_id: currentSessionId
         });
       }
     });
 
     socket.on('session_started', (data) => {
       currentSessionId = data.session_id;
-      console.log('✅ Session ID:', currentSessionId);
     });
 
-    socket.on('session_restored', (data) => {
-      if (data.success) {
-        console.log('✅ Session restored! Game continues...');
-      } else {
-        console.log('⚠️ Session not found, starting new game');
-      }
+    socket.on('session_closed', () => {
+      stopRequested = true;
     });
 
     socket.on('physics_update', (state) => {
       if (state.elapsed_time !== undefined) {
         elapsedTime = state.elapsed_time;
         const timeNotice = document.getElementById('time-notice');
-        if (elapsedTime > 60 && !lotteryFinished) {
-          timeNotice.style.display = 'block';
-        } else {
-          timeNotice.style.display = 'none';
-        }
+        timeNotice.style.display = elapsedTime > 60 && !lotteryFinished ? 'block' : 'none';
       }
 
       if (state.camera) {
@@ -382,25 +394,18 @@ HTML_TEMPLATE = '''
 
       if (winnerStartIndex === -1 && remainingMarbles === winningRank) {
         winnerStartIndex = winners.length;
-        console.log('🎯 Winners start at index:', winnerStartIndex);
       }
 
       if (!lotteryFinished && remainingMarbles === 1 && state.marbles && state.marbles.length > 0) {
         lotteryFinished = true;
         winnerMarble = state.marbles[0];
-        console.log('🎉 Last marble! Creating particles...');
 
         const finalWinners = [];
-
         for (let i = winnerStartIndex; i < winners.length; i++) {
           finalWinners.push(winners[i].name);
         }
-
         finalWinners.push(winnerMarble.name);
-
         finalWinners.reverse();
-
-        console.log('🏆 Final winners (1위→end):', finalWinners);
 
         if (window.parent !== window) {
           window.parent.postMessage({
@@ -413,31 +418,33 @@ HTML_TEMPLATE = '''
           particles.push(new Particle(canvas.width / 2, canvas.height / 2));
         }
 
-        setTimeout(() => {
-          console.log('⏸️ Stopping physics after particles...');
-          socket.emit('stop_lottery', { session_id: currentSessionId });
-        }, 3000);
+        if (!stopRequested) {
+          stopRequested = true;
+          setTimeout(() => {
+            socket.emit('stop_lottery', { session_id: currentSessionId });
+          }, 3000);
+        }
       }
 
-      updateWinnerDisplay(state);
+      updateWinnerDisplay();
       render(state);
     });
 
     function animate() {
-      particles.forEach(p => p.update(16));
-      particles = particles.filter(p => !p.isDestroy);
+      particles.forEach((p) => p.update(16));
+      particles = particles.filter((p) => !p.isDestroy);
       requestAnimationFrame(animate);
     }
     animate();
 
-    function updateWinnerDisplay(state) {
+    function updateWinnerDisplay() {
       const list = document.getElementById('winner-list');
       list.innerHTML = '';
 
       if (lotteryFinished && winnerMarble) {
         const div = document.createElement('div');
         div.className = 'winner-item';
-        div.textContent = '1위: ' + winnerMarble.name;
+        div.textContent = '1st ' + winnerMarble.name;
         list.appendChild(div);
       }
 
@@ -449,10 +456,10 @@ HTML_TEMPLATE = '''
         if (winnerStartIndex !== -1 && i >= winnerStartIndex) {
           div.className = 'winner-item';
           const winnerRank = winningRank - (i - winnerStartIndex);
-          div.textContent = winnerRank + '위: ' + winner.name;
+          div.textContent = winnerRank + 'th ' + winner.name;
         } else {
           div.className = 'winner-item-lost';
-          div.textContent = rank + '위: ' + winner.name;
+          div.textContent = rank + 'th ' + winner.name;
         }
 
         list.appendChild(div);
@@ -483,7 +490,7 @@ HTML_TEMPLATE = '''
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'white';
 
-        state.walls.forEach(wall => {
+        state.walls.forEach((wall) => {
           ctx.beginPath();
           ctx.moveTo(wall[0][0], wall[0][1]);
           for (let i = 1; i < wall.length; i++) {
@@ -499,7 +506,7 @@ HTML_TEMPLATE = '''
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
 
-        state.pins.forEach(pin => {
+        state.pins.forEach((pin) => {
           ctx.save();
           ctx.translate(pin.x, pin.y);
           ctx.rotate(pin.angle);
@@ -514,7 +521,7 @@ HTML_TEMPLATE = '''
         ctx.shadowBlur = 5;
         ctx.shadowColor = 'cyan';
 
-        state.boxes.forEach(box => {
+        state.boxes.forEach((box) => {
           ctx.save();
           ctx.translate(box.x, box.y);
           ctx.rotate(box.angle);
@@ -525,7 +532,7 @@ HTML_TEMPLATE = '''
       }
 
       if (state.skill_effects) {
-        state.skill_effects.forEach(effect => {
+        state.skill_effects.forEach((effect) => {
           ctx.save();
           ctx.globalAlpha = effect.alpha;
           ctx.strokeStyle = 'white';
@@ -538,7 +545,7 @@ HTML_TEMPLATE = '''
       }
 
       if (state.marbles) {
-        state.marbles.forEach(marble => {
+        state.marbles.forEach((marble) => {
           ctx.save();
           ctx.translate(marble.x, marble.y);
           ctx.rotate(marble.angle);
@@ -552,7 +559,7 @@ HTML_TEMPLATE = '''
           ctx.shadowBlur = 0;
 
           ctx.rotate(-marble.angle);
-          ctx.scale(1/camera.zoom, 1/camera.zoom);
+          ctx.scale(1 / camera.zoom, 1 / camera.zoom);
           ctx.fillStyle = '#fff';
           ctx.font = 'bold 12px sans-serif';
           ctx.textAlign = 'center';
@@ -567,7 +574,7 @@ HTML_TEMPLATE = '''
 
       ctx.restore();
 
-      particles.forEach(particle => {
+      particles.forEach((particle) => {
         ctx.save();
         ctx.globalAlpha = particle.getAlpha();
         ctx.fillStyle = 'hsl(' + particle.hue + ', 50%, 50%)';
@@ -578,10 +585,11 @@ HTML_TEMPLATE = '''
   </script>
 </body>
 </html>
-'''
+"""
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import os
 
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
+    port = int(os.environ.get("PORT", 5000))
+    socketio.run(app, host="0.0.0.0", port=port, debug=False, allow_unsafe_werkzeug=True)
